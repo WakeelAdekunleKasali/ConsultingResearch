@@ -1,0 +1,1289 @@
+---
+title: "STAT 547"
+format: pdf
+---
+
+---
+title: "STAT547 PROJECT"
+format: pdf
+---
+
+# SEM components - Figure 4
+
+```{r}
+library(ggplot2)
+#library(dplyr)
+#library(tidyr)
+
+df <- data.frame(
+  Iteration = rep(1:100, 15),
+  LogLikelihood = rnorm(1500,
+                        mean = -100,
+                        sd = 10),
+  StepSize = rep(c(0.1, 0.5, 1), each = 500),
+  Variance = rep(c(0.1, 1, 5), times = 100),
+  FractionMissing = rep(c(0.2, 0.5, 0.8), each = 50)
+)
+
+```
+
+
+```{r}
+df <- df %>% 
+  mutate(StepSize = as.factor(StepSize),
+         Variance = as.factor(Variance),
+         FractionMissing = as.factor(FractionMissing))
+
+
+ggplot(df, aes(x = Iteration,
+               y = LogLikelihood,
+               color = FractionMissing,
+               group = interaction(FractionMissing,
+                                   Variance))) +
+  geom_line(size = 0.3) +
+  facet_grid(StepSize ~ Variance,
+             labeller = label_both) + 
+  scale_color_brewer(palette = "Set1") + 
+  labs(
+    title = "",
+    x = "Iteration",
+    y = "Log-Likelihood",
+    color = "Fraction Missing"
+  ) +
+  theme_bw(base_size = 5) +
+  theme(
+    strip.text = element_text(size = 5, face = "bold"),
+    legend.position = "bottom"
+  )
+```
+
+
+# Step size - Figure 3
+
+```{r}
+# Stochastic EM function
+stochasticEM <- function(Y,
+                         censored,
+                         theta.init,
+                         max.iter = 100, step_size = 1) {
+  theta <- theta.init
+  theta.history <- numeric(max.iter)
+  
+  for (iter in 1:max.iter) {
+    # Stochastic E-step
+    simulatedData <- ifelse(censored,
+                            rexp(length(Y),
+                                 rate = 1/theta), Y)
+    
+    # M-step
+    theta.new <- mean(simulatedData)
+    
+    # Including step size
+    theta <- theta + step_size * (theta.new - theta)
+    
+    # Store theta in history
+    theta.history[iter] <- theta
+  }
+  
+  return(list(theta.final = theta,
+              theta.history = theta.history))
+}
+```
+
+
+```{r}
+simulatStepSizes <- function(stepSizes,
+                             Y, censored,
+                             theta.init, max.iter = 100) {
+  results <- lapply(stepSizes, function(size) {
+    res <- stochasticEM(Y,
+                        censored,
+                        theta.init,
+                        max.iter,
+                        step_size = size)
+    data.frame(
+      Iteration = 1:max.iter,
+      Theta = res$theta.history,
+      StepSize = factor(size)
+    )
+  })
+  
+  # Combine results into a single data frame
+  results_df <- bind_rows(results)
+  return(results_df)
+}
+```
+
+
+```{r}
+set.seed(123)
+n <- 100
+true_theta <- 1.5
+Y <- rexp(n, rate = 1/true_theta)
+censored <- Y > 2
+Y[censored] <- 2
+theta.init <- 0.5
+stepSizes <- c(1, 0.5, 0.1)
+
+
+results_df <- simulatStepSizes(stepSizes,
+                               Y, censored,
+                               theta.init,
+                               max.iter = 100)
+
+```
+
+
+```{r}
+ggplot(results_df, aes(x = Iteration,
+                       y = Theta,
+                       color = StepSize,
+                       group = StepSize)) +
+  geom_line() +
+  geom_point(size = 0.7) +
+  labs(
+    title = "",
+    x = "Iteration",
+    y = expression(hat(theta)),
+    color = "Step Size"
+  ) +
+  theme_bw() +
+  theme(legend.position = "right")
+```
+
+
+
+# MCEMFigure 2
+
+```{r}
+# Define the log-likelihood function
+logLikelihood <- function(theta, data) {
+  sum(dnorm(data,
+            mean = theta,
+            sd = 1, log = TRUE))
+}
+```
+
+
+```{r}
+# Generate incomplete data for the simulation
+set.seed(42)
+n <- 100  # Number of data points
+theta.true <- 2
+data <- rnorm(n, 
+              mean = theta.true,
+              sd = 1)
+
+```
+
+
+```{r}
+# Introduce missingness
+missing.fraction <- 0.3
+missing.indices <- sample(1:n,
+                          size = round(missing.fraction * n))
+observed.data <- data[-missing.indices]
+
+# MCEM Implementation
+MCEM <- function(observed.data,
+                 theta.init,
+                 max.iter,
+                 mSimulations) {
+  theta.est <- numeric(max.iter)
+  theta.est[1] <- theta.init
+  
+  for (k in 2:max.iter) {
+    # Monte Carlo E-step
+    simulatedData <- replicate(mSimulations, {
+      missingData <- rnorm(length(missing.indices),
+                            mean = theta.est[k - 1],
+                            sd = 1)
+      complete_data <- c(observed.data, missingData)
+      complete_data
+    })
+    
+   
+    simulatedData <- t(simulatedData)
+    
+    # Approximate Q-function
+    Q_theta <- apply(simulatedData,
+                     1,
+                     logLikelihood,
+                     theta = theta.est[k - 1])
+    
+    # M-step
+    theta.est[k] <- mean(apply(simulatedData, 1, mean))
+  }
+  
+  return(theta.est)
+}
+```
+
+
+```{r}
+theta.init <- 0  
+max.iter <- 100  
+mSimulations <- 10  
+
+
+theta_mcem <- MCEM(observed.data,
+                   theta.init,
+                   max.iter,
+                   mSimulations)
+
+iterations <- 1:max.iter
+mcem_results <- data.frame(Iteration = iterations,
+                           Estimate = theta_mcem)
+
+MCEM <- ggplot(mcem_results, aes(x = Iteration,
+                         y = Estimate)) +
+  geom_line(color = "blue") +
+  geom_hline(yintercept = theta.true,
+             linetype = "dashed", color = "red") +
+  labs(
+    title = "",
+    x = "Iteration",
+    y = expression(hat(theta))
+  ) +
+  theme_bw()
+```
+
+
+# SEM - Figure 1
+
+# A simple censored data problem
+
+```{r}
+set.seed(123)
+
+n <- 100          
+theta.true <- 2   
+censor.pt <- 1.5  # Censoring threshold
+
+X <- rexp(n, rate = 1/theta.true)  
+censored <- X > censor.pt       # Identify censored values
+Y <- ifelse(censored, 
+            censor.pt, X)  # Observed data (censored values truncated)
+```
+
+
+# Stochastic E-step
+
+```{r}
+stochastic.EStep <- function(Y,
+                             censored, theta) {
+  # Simulate from the conditional distribution
+  Xsim <- Y
+  Xsim[censored] <- rexp(sum(censored),
+                          rate = 1/theta) + censor.pt
+  return(Xsim)
+}
+```
+
+# Stochastic M-step
+
+```{r}
+Mstep <- function(Xsim) {
+  # Maximum likelihood estimator for exponential mean
+  theta.new <- mean(Xsim)
+  return(theta.new)
+}
+```
+
+
+
+```{r}
+# Stochastic EM Algorithm
+stochastic.EM <- function(Y, censored,
+                          theta.init,
+                          max.iter = 100, tol = 1e-6) {
+  theta <- theta.init
+  theta.history <- numeric(max.iter)
+  
+  for (iter in 1:max.iter) {
+    # E-step: Simulate missing data
+    Xsim <- stochastic.EStep(Y, censored, theta)
+    
+    # M-step: Update parameter estimate
+    theta.new <- Mstep(Xsim)
+    
+    theta.history[iter] <- theta.new
+    
+    # Check convergence
+    if (abs(theta.new - theta) < tol) {
+      message("Convergence achieved after ", iter, " iterations.")
+      theta.history <- theta.history[1:iter]  # Trim history
+      break
+    }
+    
+    # Update parameter
+    theta <- theta.new
+  }
+  
+  return(list(theta.est = theta.new,
+              theta.history = theta.history))
+}
+```
+
+
+
+```{r}
+# Initial parameter guess
+theta.init <- 1.0
+
+
+result <- stochastic.EM(Y, censored, theta.init)
+
+theta.est <- result$theta.est
+theta.history <- result$theta.history
+
+theta.data <- data.frame(
+  Iteration = 1:length(theta.history),
+  ParamEstimate = theta.history
+)
+
+sem_plot <- ggplot(theta.data, aes(x = Iteration,
+                                   y = ParamEstimate)) +
+  geom_line(color = "blue",
+            linewidth = 0.7) +       
+  geom_point(color = "blue",
+             size = 1) +    
+  geom_hline(yintercept = theta.true,        
+             color = "red",
+             linetype = "dashed", size = 1) +
+  labs(
+    title = "",
+    x = "Iteration",
+    y = expression(hat(theta))
+  ) +
+  theme_bw(base_size = 14)  
+```
+
+From the plot, the algorithm appears to stabilize around the true value, but the persistent fluctuations throughout the 100 iterations suggest that additional iterations or reduced stochastic noise (e.g., larger sample sizes in the E-step) might be necessary to achieve clearer evidence of convergence.
+
+
+
+
+
+
+```{r}
+# Define the log-likelihood function
+logLikelihood <- function(theta, data) {
+  sum(dnorm(data, mean = theta, sd = 1, log = TRUE))
+}
+
+# Generate incomplete data for the simulation
+set.seed(42)
+n <- 100  # Number of data points
+theta.true <- 2
+data <- rnorm(n, mean = theta.true, sd = 1)
+
+# Introduce missingness
+missing.fraction <- 0.3
+missing.indices <- sample(1:n, size = round(missing.fraction * n))
+observed.data <- data[-missing.indices]
+
+# MCEM Implementation
+MCEM <- function(observed.data, theta.init, max.iter, mSimulations) {
+  theta.est <- numeric(max.iter)
+  theta.est[1] <- theta.init
+  
+  for (k in 2:max.iter) {
+    # Monte Carlo E-step: Simulate missing data based on current theta estimate
+    simulatedData <- replicate(mSimulations, {
+      missingData <- rnorm(length(missing.indices), mean = theta.est[k - 1], sd = 1)
+      complete_data <- c(observed.data, missingData)
+      complete_data
+    })
+    
+    # Ensure simulatedData is a matrix (mSimulations rows of complete datasets)
+    simulatedData <- t(simulatedData)
+    
+    # Approximate Q-function (expected log-likelihood) using Monte Carlo samples
+    Q_theta <- apply(simulatedData, 1, logLikelihood, theta = theta.est[k - 1])
+    
+    # M-step: Update theta to maximize the approximated Q-function
+    theta.est[k] <- mean(apply(simulatedData, 1, mean))
+  }
+  
+  return(theta.est)
+}
+
+
+# Parameters for the MCEM
+theta.init <- 0  # Initial guess for theta
+max.iter <- 100  # Maximum number of iterations
+mSimulations <- 10  # Monte Carlo samples
+
+# Run the MCEM algorithm
+theta_mcem <- MCEM(observed.data, theta.init, max.iter, mSimulations)
+
+# Plot the results
+library(ggplot2)
+iterations <- 1:max.iter
+mcem_results <- data.frame(Iteration = iterations, Estimate = theta_mcem)
+
+mcem_plot <- ggplot(mcem_results, aes(x = Iteration, y = Estimate)) +
+  geom_line(color = "blue") +
+  geom_hline(yintercept = theta.true, linetype = "dashed", color = "red") +
+  labs(
+    title = "",
+    x = "Iteration",
+    y = expression(hat(theta))
+  ) +
+  theme_bw()
+
+```
+
+
+
+```{r}
+stochasticEM <- function(Y, censored, theta.init, max.iter = 100, step_size = 1) {
+  theta <- theta.init
+  theta.history <- numeric(max.iter)
+  
+  for (iter in 1:max.iter) {
+    # Stochastic E-step: Simulate missing data
+    simulatedData <- ifelse(censored, rexp(length(Y), rate = 1/theta), Y)
+    
+    # M-step: Update parameter estimate
+    theta.new <- mean(simulatedData)
+    
+    # Incorporate step size
+    theta <- theta + step_size * (theta.new - theta)
+    
+    # Store theta in history
+    theta.history[iter] <- theta
+  }
+  
+  return(list(theta.final = theta, theta.history = theta.history))
+}
+
+```
+
+
+```{r}
+simulatStepSizes <- function(stepSizes, Y, censored, theta.init, max.iter = 100) {
+  results <- lapply(stepSizes, function(size) {
+    stochasticEM(Y, censored, theta.init, max.iter, step_size = size)
+  })
+  
+  theta_histories <- lapply(results, function(res) res$theta.history)
+  
+  # Determine the range for y-axis
+  all_thetas <- do.call(c, theta_histories)
+  ylim_range <- range(all_thetas, na.rm = TRUE)
+  
+  # Plot results
+  plot(1, type = "n", xlim = c(1, max.iter), ylim = ylim_range, 
+       xlab = "Iteration", ylab = "Parameter Estimate", 
+       main = "Effect of Step Size on Convergence")
+  
+  colors <- c("black", "red", "green", "blue", "orange")
+  for (i in seq_along(stepSizes)) {
+    lines(theta_histories[[i]], type = "o", col = colors[i], pch = 16, lty = 1)
+  }
+  legend("topright", legend = paste("Step size =", stepSizes), col = colors, pch = 16)
+}
+
+```
+
+
+```{r}
+set.seed(123)
+n <- 100
+true_theta <- 1.5
+Y <- rexp(n, rate = 1/true_theta)
+censored <- Y > 2
+Y[censored] <- 2
+theta.init <- 0.5
+stepSizes <- c(1, 0.5, 0.1)
+
+simulatStepSizes(stepSizes, Y, censored, theta.init, max.iter = 100)
+```
+
+
+
+
+# FRACTION OF MISSING INFORMATION
+
+```{r}
+# Define function to simulate data with missing information
+simulate_data <- function(n, theta, missing.fraction) {
+  # Generate complete data (exponential with mean = 1 / theta)
+  complete_data <- rexp(n, rate = theta)
+  
+  # Apply censoring to introduce missingness
+  censoring_threshold <- quantile(complete_data, probs = 1 - missing.fraction)
+  censored_data <- ifelse(complete_data < censoring_threshold, NA, complete_data)
+  
+  return(list(complete = complete_data, censored = censored_data))
+}
+```
+
+```{r}
+# Define the Stochastic EM algorithm
+stochasticEM <- function(censored_data, theta.init, max.iter, m) {
+  n <- length(censored_data)
+  theta <- theta.init
+  estimates <- numeric(max.iter)
+  
+  for (iter in 1:max.iter) {
+    # Stochastic E-step: Simulate m values for each missing data point
+    simulatedData <- sapply(censored_data, function(x) {
+      if (is.na(x)) {
+        rexp(m, rate = theta)  # Simulate m replacements for missing values
+      } else {
+        rep(x, m)  # Keep observed values unchanged
+      }
+    })
+    
+    # M-step: Maximize the likelihood using the simulated data
+    complete_data <- as.numeric(simulatedData)
+    theta <- 1 / mean(complete_data)  # MLE for exponential distribution
+    
+    # Store the estimate
+    estimates[iter] <- theta
+  }
+  
+  return(estimates)
+}
+```
+
+```{r}
+# Perform simulations for different fractions of missing information
+analyze_missing_information <- function(n, true_theta, missing.fractions, m_values, max.iter) {
+  results <- data.frame()
+  
+  for (missing.fraction in missing.fractions) {
+    for (m in m_values) {
+      # Simulate data
+      data <- simulate_data(n, true_theta, missing.fraction)
+      
+      # Run the Stochastic EM algorithm
+      estimates <- stochasticEM(data$censored, theta.init = 1, max.iter = max.iter, m = m)
+      
+      # Calculate efficiency: Final variance and relative efficiency
+      efficiency <- var(estimates) / (1 / (n * true_theta^2))
+      
+      # Store results
+      results <- rbind(results, data.frame(
+        MissingFraction = missing.fraction,
+        Efficiency = 1 / efficiency,  # Relative efficiency
+        m = m
+      ))
+    }
+  }
+  
+  return(results)
+}
+
+```
+
+```{r}
+library(ggplot2)
+# Simulation parameters
+n <- 1000               # Sample size
+true_theta <- 1         # True parameter value
+missing.fractions <- seq(0, 0.9, by = 0.1)  # Fractions of missing information
+m_values <- c(1, 5, 10)  # Number of simulations per iteration
+max.iter <- 100         # Number of iterations
+
+# Run simulations
+results <- analyze_missing_information(n, true_theta, missing.fractions, m_values, max.iter)
+
+# Plot results
+ggplot(results, aes(x = MissingFraction, y = Efficiency, color = factor(m), linetype = factor(m))) +
+  geom_line(size = 0.2) +
+  geom_point(size = 0.5) +
+  scale_color_manual(values = c("black", "red", "blue")) +
+  labs(
+    title = "Relative Efficiency vs Fraction of Missing Information",
+    x = "Fraction of Missing Information",
+    y = "Relative Efficiency",
+    color = "m (Simulations)",
+    linetype = "m (Simulations)"
+  ) +
+  theme_bw(base_size = 14) +
+  theme(legend.position = "top")
+
+```
+
+
+
+```{r}
+library(ggplot2)
+
+library(ggplot2)
+library(dplyr)
+
+# Function to calculate relative efficiency
+simulate_efficiency <- function(n, true_theta, missing.fraction, m, max.iter) {
+  set.seed(123)
+  
+  observed.data <- rexp(n, rate = 1 / true_theta)  # Exponentially distributed data
+  missingData <- ifelse(runif(n) < missing.fraction, NA, observed.data)
+  
+  mle_var <- 1 / (n * (1 / true_theta)^2)  # Variance of MLE
+  
+  # Simulate the stochastic EM for m iterations
+  sim_variances <- numeric(m)
+  for (j in 1:m) {
+    theta.estimates <- numeric(max.iter)
+    theta_current <- 0.5  # Initial guess
+    
+    for (i in 1:max.iter) {
+      # E-step: Impute missing data
+      imputed_data <- ifelse(is.na(missingData), rexp(sum(is.na(missingData)), rate = 1 / theta_current), missingData)
+      
+      # M-step: Update theta
+      theta_current <- mean(c(observed.data[!is.na(observed.data)], imputed_data))
+      theta.estimates[i] <- theta_current
+    }
+    
+    # Variance of final estimates
+    sim_variances[j] <- var(theta.estimates)
+  }
+  
+  # Compute relative efficiency
+  efficiency <- mle_var / mean(sim_variances)
+  return(efficiency)
+}
+```
+
+
+```{r}
+# Main function to analyze missing fractions
+analyze_missing_information <- function(n, true_theta, missing.fractions, m_values, max.iter) {
+  results <- expand.grid(MissingFraction = missing.fractions, m = m_values) %>%
+    rowwise() %>%
+    mutate(Efficiency = simulate_efficiency(n, true_theta, MissingFraction, m, max.iter)) %>%
+    ungroup()
+  
+  return(results)
+}
+
+```
+
+
+```{r}
+# Simulation parameters
+n <- 1000               # Sample size
+true_theta <- 1         # True parameter value
+missing.fractions <- seq(0, 0.9, by = 0.1)  # Fractions of missing information
+m_values <- c(1, 5, 10)  # Number of simulations per iteration
+max.iter <- 100         # Number of iterations
+
+```
+
+
+```{r}
+# Run simulations
+results <- analyze_missing_information(n, true_theta, missing.fractions, m_values, max.iter)
+
+# Plot results
+ggplot(results, aes(x = MissingFraction, y = Efficiency, color = factor(m), linetype = factor(m))) +
+  geom_line(size = 0.3) +
+  geom_point(size = 0.2) +
+  scale_color_manual(values = c("black", "red", "blue")) +
+  labs(
+    title = "Relative Efficiency vs Fraction of Missing Information",
+    x = "Fraction of Missing Information",
+    y = "Relative Efficiency",
+    color = "m (Simulations)",
+    linetype = "m (Simulations)"
+  ) +
+  theme_bw(base_size = 14) +
+  theme(legend.position = "top")
+```
+
+
+```{r}
+library(ggplot2)
+library(dplyr)
+
+# Function to calculate relative efficiency
+simulate_efficiency <- function(n, true_theta, missing.fraction, m, max.iter) {
+  set.seed(123)
+  
+  observed.data <- rexp(n, rate = 1 / true_theta)  # Exponentially distributed data
+  is_missing <- runif(n) < missing.fraction
+  observed.data[is_missing] <- NA  # Introduce missingness
+  
+  # Compute MLE variance as a baseline
+  mle_var <- 1 / (n * (1 / true_theta)^2)
+  
+  # Simulate Stochastic EM variances for m simulations
+  sim_variances <- numeric(m)
+  for (j in 1:m) {
+    theta.estimates <- numeric(max.iter)
+    theta_current <- mean(observed.data, na.rm = TRUE)  # Initial guess
+    
+    for (i in 1:max.iter) {
+      # E-step: Impute missing data
+      imputed_data <- ifelse(is.na(observed.data), rexp(sum(is_missing), rate = 1 / theta_current), observed.data)
+      
+      # M-step: Update theta
+      theta_current <- mean(imputed_data)
+      theta.estimates[i] <- theta_current
+    }
+    
+    # Compute variance of theta estimates across iterations
+    sim_variances[j] <- var(theta.estimates)
+  }
+  
+  # Relative efficiency: Variance of MLE / Average variance of Stochastic EM
+  efficiency <- mle_var / mean(sim_variances)
+  return(efficiency)
+}
+
+# Main function to analyze missing fractions
+analyze_missing_information <- function(n, true_theta, missing.fractions, m_values, max.iter) {
+  results <- expand.grid(MissingFraction = missing.fractions, m = m_values) %>%
+    rowwise() %>%
+    mutate(Efficiency = simulate_efficiency(n, true_theta, MissingFraction, m, max.iter)) %>%
+    ungroup()
+  
+  return(results)
+}
+
+# Simulation parameters
+n <- 1000               # Sample size
+true_theta <- 1         # True parameter value
+missing.fractions <- seq(0, 0.9, by = 0.1)  # Fractions of missing information
+m_values <- c(1, 5, 10)  # Number of simulations per iteration
+max.iter <- 100         # Number of iterations
+
+# Run simulations
+results <- analyze_missing_information(n, true_theta, missing.fractions, m_values, max.iter)
+
+# Plot results
+ggplot(results, aes(x = MissingFraction, y = Efficiency, color = factor(m), linetype = factor(m))) +
+  geom_line(size = 1) +
+  geom_point(size = 2) +
+  scale_color_manual(values = c("black", "red", "blue")) +
+  labs(
+    title = "Relative Efficiency vs Fraction of Missing Information",
+    x = "Fraction of Missing Information",
+    y = "Relative Efficiency",
+    color = "m (Simulations)",
+    linetype = "m (Simulations)"
+  ) +
+  theme_bw(base_size = 14) +
+  theme(legend.position = "top")
+
+```
+
+
+```{r}
+# Stochastic EM Algorithm for Gaussian Mixture Models
+stochasticEM_GMM <- function(data, K, max.iter = 100, epsilon = 1e-6, m = 5) {
+  # Initialization
+  n <- length(data)
+  theta <- list(
+    mu = runif(K, min = min(data), max = max(data)),
+    sigma = rep(sd(data) / 2, K),
+    pi = rep(1 / K, K)
+  )
+  logLikelihood <- numeric(max.iter)
+  
+  for (iter in 1:max.iter) {
+    # Stochastic E-Step: Simulate missing cluster memberships (Z)
+    Z_simulated <- matrix(0, nrow = n, ncol = K)
+    for (i in 1:n) {
+      probs <- theta$pi * dnorm(data[i], mean = theta$mu, sd = theta$sigma)
+      probs <- probs / sum(probs)
+      Z_simulated[i, ] <- rmultinom(1, size = m, prob = probs)
+    }
+    
+    # Compute expected sufficient statistics
+    Nk <- colSums(Z_simulated) / m
+    mu_k <- colSums(Z_simulated * data) / Nk
+    sigma_k <- sqrt(colSums(Z_simulated * (data - mu_k)^2) / Nk)
+    pi_k <- Nk / sum(Nk)
+    
+    # M-Step: Update parameters
+    new_theta <- list(mu = mu_k, sigma = sigma_k, pi = pi_k)
+    
+    # Compute log-likelihood
+    logLikelihood[iter] <- sum(log(rowSums(sapply(1:K, function(k) {
+      theta$pi[k] * dnorm(data, mean = theta$mu[k], sd = theta$sigma[k])
+    }))))
+    
+    # Check convergence
+    if (iter > 1 && abs(logLikelihood[iter] - logLikelihood[iter - 1]) < epsilon) break
+    
+    # Update theta
+    theta <- new_theta
+  }
+  
+  return(list(parameters = theta, logLikelihood = logLikelihood[1:iter]))
+}
+```
+
+```{r}
+# Simulate data and apply the StEM algorithm
+set.seed(123)
+data <- c(rnorm(100, mean = 2, sd = 1), rnorm(100, mean = 5, sd = 1.5))
+result <- stochasticEM_GMM(data, K = 2)
+
+# Plot the log-likelihood progression
+plot(result$logLikelihood, type = "l", main = "Log-Likelihood Convergence",
+     xlab = "Iteration", ylab = "Log-Likelihood", col = "blue", lwd = 2)
+```
+
+
+```{r}
+# Modified StEM function with adjustable Monte Carlo sample size (m)
+stochasticEM_with_m <- function(censored_data, theta.init, max.iter, m) {
+  n <- length(censored_data)
+  logLikelihoods <- numeric(max.iter)
+  theta <- theta.init
+  
+  for (iter in 1:max.iter) {
+    # Stochastic E-step: simulate missing data using m samples
+    simulatedData <- replicate(m, {
+      ifelse(censored_data < theta, runif(n, 0, theta), censored_data)
+    })
+    simulatedData <- rowMeans(simulatedData)
+    
+    # M-step: update theta using simulated data
+    theta <- mean(simulatedData)
+    
+    # Compute the log-likelihood for the current theta
+    logLikelihood <- sum(log(ifelse(censored_data < theta, theta, censored_data)))
+    logLikelihoods[iter] <- logLikelihood
+  }
+  
+  list(theta = theta, logLikelihoods = logLikelihoods)
+}
+
+# Simulate data
+set.seed(123)
+n <- 100
+true_theta <- 10
+censored_data <- pmin(runif(n, 0, 15), true_theta)
+
+# Parameters
+theta.init <- 5
+max.iter <- 100
+m_values <- c(1, 5, 10, 50)  # Different Monte Carlo sample sizes
+
+# Run StEM for different m values and collect results
+results <- lapply(m_values, function(m) {
+  stochasticEM_with_m(censored_data, theta.init, max.iter, m)
+})
+
+# Plot log-likelihood trajectories for different m values
+plot(1:max.iter, results[[1]]$logLikelihoods, type = "l", col = "red", lwd = 2,
+     ylim = range(sapply(results, function(res) res$logLikelihoods)),
+     xlab = "Iteration", ylab = "Log-Likelihood",
+     main = "Effect of Monte Carlo Sample Size (m) on Log-Likelihood")
+lines(1:max.iter, results[[2]]$logLikelihoods, col = "blue", lwd = 2)
+lines(1:max.iter, results[[3]]$logLikelihoods, col = "green", lwd = 2)
+lines(1:max.iter, results[[4]]$logLikelihoods, col = "violet", lwd = 2)
+
+legend("bottomright", legend = paste("m =", m_values),
+       col = c("red", "blue", "green", "violet"), lwd = 2)
+
+```
+
+
+
+```{r}
+# Simulation of StEM with varying step sizes and missing information fractions
+simulate_stem <- function(stepSizes, fractions_missing, max.iter, theta.init, n) {
+  results <- list()
+  
+  for (alpha in stepSizes) {
+    for (frac in fractions_missing) {
+      # Generate data
+      complete_data <- rexp(n, rate = 1)
+      missing_mask <- runif(n) < frac
+      observed.data <- complete_data
+      observed.data[missing_mask] <- NA
+      
+      # StEM implementation
+      theta <- theta.init
+      logLikelihoods <- numeric(max.iter)
+      for (i in 1:max.iter) {
+        # Stochastic E-step: Impute missing data
+        imputed_data <- ifelse(is.na(observed.data), rexp(sum(missing_mask), rate = 1 / theta), observed.data)
+        
+        # M-step: Update parameter
+        theta <- theta + alpha * (mean(imputed_data) - theta)
+        
+        # Calculate log-likelihood
+        logLikelihoods[i] <- sum(dexp(observed.data, rate = 1 / theta, log = TRUE), na.rm = TRUE)
+      }
+      
+      # Store results
+      results[[paste0("alpha_", alpha, "_frac_", frac)]] <- list(
+        theta = theta,
+        logLikelihoods = logLikelihoods
+      )
+    }
+  }
+  
+  return(results)
+}
+
+# Parameters
+stepSizes <- c(0.1, 0.5, 1)
+fractions_missing <- seq(0, 0.8, by = 0.2)
+results <- simulate_stem(stepSizes, fractions_missing, max.iter = 100, theta.init = 1, n = 100)
+
+# Visualization
+library(ggplot2)
+plot_data <- data.frame()
+for (res_name in names(results)) {
+  res <- results[[res_name]]
+  alpha <- as.numeric(strsplit(res_name, "_")[[1]][2])
+  frac <- as.numeric(strsplit(res_name, "_")[[1]][4])
+  plot_data <- rbind(plot_data, data.frame(
+    Iteration = 1:100,
+    LogLikelihood = res$logLikelihoods,
+    StepSize = alpha,
+    FractionMissing = frac
+  ))
+}
+
+ggplot(plot_data, aes(x = Iteration, y = LogLikelihood, color = as.factor(FractionMissing))) +
+  geom_line() +
+  facet_wrap(~ StepSize, scales = "free_y") +
+  labs(title = "Log-Likelihood Convergence for Varying Step Sizes and Missing Information Fractions",
+       x = "Iteration",
+       y = "Log-Likelihood",
+       color = "Fraction Missing")
+
+```
+
+
+```{r}
+# Load required packages
+library(ggplot2)
+library(dplyr)
+
+# Function to simulate the stochastic E-step with variance impact
+simulate_variance_effect <- function(iterations, true_theta, variance_values) {
+  results <- data.frame(Iteration = integer(),
+                        Variance = double(),
+                        LogLikelihood = double())
+  
+  for (var in variance_values) {
+    logLikelihood <- numeric(iterations)
+    current_theta <- 0.5  # Initialize theta
+    
+    for (iter in 1:iterations) {
+      # Simulate stochastic E-step with variance
+      noise <- rnorm(1, mean = 0, sd = sqrt(var))
+      current_theta <- current_theta + noise * (true_theta - current_theta)
+      logLikelihood[iter] <- -((current_theta - true_theta)^2) / (2 * var)
+    }
+    
+    # Store results
+    results <- rbind(results,
+                     data.frame(Iteration = 1:iterations,
+                                Variance = as.factor(var),
+                                LogLikelihood = logLikelihood))
+  }
+  
+  return(results)
+}
+
+# Parameters for the simulation
+iterations <- 100
+true_theta <- 1
+variance_values <- c(0.1, 0.5, 1, 2, 5)  # Variance levels
+
+# Run the simulation
+simulation_results <- simulate_variance_effect(iterations, true_theta, variance_values)
+
+# Plot results
+ggplot(simulation_results, aes(x = Iteration, y = LogLikelihood, color = Variance)) +
+  geom_line(size = 0.5) +
+  labs(title = "Log-Likelihood Convergence for Different Variances",
+       x = "Iteration", y = "Log-Likelihood") +
+  theme_bw() +
+  theme(legend.title = element_text(size = 10),
+        legend.text = element_text(size = 9),
+        plot.title = element_text(size = 14, hjust = 0.5)) +
+  facet_wrap(~ Variance, scales = "free_y", ncol = 3)
+
+```
+
+
+
+```{r}
+# Define simulation function
+stochasticEM_analysis <- function(data, stepSizes, variances, fractions_missing, max.iter) {
+  results <- list()
+  
+  for (alpha in stepSizes) {
+    for (sigma2 in variances) {
+      for (frac in fractions_missing) {
+        # Simulate missing data
+        n <- length(data)
+        missing.indices <- sample(1:n, size = floor(frac * n))
+        observed.data <- data
+        observed.data[missing.indices] <- NA
+        
+        # Initialize parameters
+        theta <- mean(data, na.rm = TRUE)
+        logLikelihood <- numeric(max.iter)
+        
+        for (iter in 1:max.iter) {
+          # Stochastic E-step
+          simulatedData <- ifelse(is.na(observed.data),
+                                   rnorm(length(missing.indices), mean = theta, sd = sqrt(sigma2)),
+                                   observed.data)
+          
+          # Log-likelihood
+          logLikelihood[iter] <- sum(dnorm(simulatedData, mean = theta, sd = sqrt(sigma2), log = TRUE))
+          
+          # M-step
+          theta <- theta + alpha * (mean(simulatedData) - theta)
+        }
+        
+        # Store results
+        results[[paste("Step=", alpha, "Var=", sigma2, "Miss=", frac)]] <- logLikelihood
+      }
+    }
+  }
+  
+  return(results)
+}
+
+# Example usage
+set.seed(123)
+data <- rnorm(100, mean = 5, sd = 1)
+stepSizes <- c(0.1, 0.5, 1)
+variances <- c(0.1, 0.5, 1, 2, 5)
+fractions_missing <- c(0.0, 0.2, 0.4, 0.6, 0.8)
+max.iter <- 100
+
+results <- stochasticEM_analysis(data, stepSizes, variances, fractions_missing, max.iter)
+
+# Plotting results
+library(ggplot2)
+plot_data <- do.call(rbind, lapply(names(results), function(key) {
+  logLikelihood <- results[[key]]
+  params <- unlist(strsplit(key, " "))
+  data.frame(Iteration = 1:max.iter,
+             LogLikelihood = logLikelihood,
+             StepSize = params[1],
+             Variance = params[2],
+             FractionMissing = params[3])
+}))
+
+ggplot(plot_data, aes(x = Iteration, y = LogLikelihood, color = FractionMissing)) +
+  geom_line() +
+  facet_grid(StepSize ~ Variance) +
+  labs(title = "Log-Likelihood Convergence",
+       x = "Iteration",
+       y = "Log-Likelihood",
+       color = "Fraction Missing") +
+  theme_minimal()
+
+```
+
+
+
+
+
+Log likelihood convergence for varying step sizes 
+
+MCEM
+
+
+```{r}
+# Generate data with missing information
+set.seed(123)
+n <- 500  # Number of observations
+true_theta <- 2  # True parameter value
+data <- rexp(n, rate = 1 / true_theta)  # Generate exponential data
+
+# Introduce missing information (censoring)
+missing.fraction <- 0.5  # Fraction of missing data
+threshold <- quantile(data, missing.fraction)  # Censoring threshold
+censored_data <- pmin(data, threshold)
+is_censored <- data > threshold
+```
+
+
+```{r}
+
+# Refined MCEM function
+MCEM <- function(data, is_censored, theta.init, max.iter, mSimulations, step_size) {
+  n <- length(data)  # Total number of data points
+  theta <- numeric(max.iter)  # To store parameter estimates over iterations
+  theta[1] <- theta.init       # Initialize with the given starting value
+
+  # Iterative process
+  for (k in 2:max.iter) {
+    # E-step: Simulate censored data and form complete-data likelihood
+    simulatedData <- numeric(n)  # Simulate for all n observations
+    for (i in 1:n) {
+      if (is_censored[i]) {
+        # Simulate censored values
+        simulatedData[i] <- rexp(1, rate = 1 / theta[k - 1])
+      } else {
+        # Retain uncensored value
+        simulatedData[i] <- data[i]
+      }
+    }
+
+    # Check for invalid simulated data (e.g., NA, Inf)
+    if (any(is.na(simulatedData)) || any(simulatedData <= 0)) {
+      stop("Simulated data contains invalid values. Check the simulation step.")
+    }
+
+    # Compute expected complete-data log-likelihood
+    complete_likelihood <- mean(log(simulatedData)) - (1 / theta[k - 1])
+
+    # Gradient of the log-likelihood
+    grad <- sum(1 / simulatedData) / n - 1 / theta[k - 1]
+
+    # M-step: Update the parameter using gradient ascent
+    theta[k] <- theta[k - 1] + step_size * grad
+
+    # Ensure theta remains positive to avoid division issues
+    if (theta[k] <= 0) {
+      theta[k] <- theta[k - 1] * 0.5  # Fallback adjustment
+    }
+
+    # Print debugging info for progress
+    cat(sprintf("Iteration %d: theta = %.5f\n", k, theta[k]))
+  }
+
+  # Return estimated theta values
+  return(theta)
+}
+
+# Example usage
+set.seed(123)  # For reproducibility
+data <- c(rexp(50, rate = 1/2))  # Generate some data
+is_censored <- sample(c(TRUE, FALSE), length(data), replace = TRUE)
+
+# Run MCEM
+theta.estimates <- MCEM(
+  data = data,
+  is_censored = is_censored,
+  theta.init = 1,
+  max.iter = 100,
+  mSimulations = 100,
+  step_size = 0.01
+)
+
+# Plot the convergence of theta
+plot(theta.estimates, type = "l", col = "blue", lwd = 2,
+     xlab = "Iteration", ylab = expression(hat(theta)),
+     main = "MCEM Convergence")
+
+
+```
+
+```{r}
+# Define the MCEM function
+MCEM <- function(data, theta.init, mSimulations, max.iter, step_size) {
+  theta <- theta.init
+  logLikelihood <- numeric(max.iter)
+  
+  for (iter in 1:max.iter) {
+    # E-step: Simulate m data points conditional on current theta
+    simulatedData <- replicate(mSimulations, rnorm(length(data), mean = theta))
+    
+    # M-step: Update theta based on the simulated data
+    theta.new <- mean(c(data, simulatedData))  # Simple mean estimator
+    theta <- theta + step_size * (theta.new - theta)  # Update theta with step size
+    
+    # Log-likelihood (optional for analysis)
+    logLikelihood[iter] <- sum(dnorm(data, mean = theta, log = TRUE))
+  }
+  
+  return(list(theta = theta, logLikelihood = logLikelihood))
+}
+
+# Simulation parameters
+set.seed(123)
+data <- rnorm(100, mean = 3)  # Observed data
+theta.init <- 1               # Initial estimate
+max.iter <- 100               # Maximum iterations
+step_size <- 0.5              # Step size for parameter updates
+
+# Experiment with different values of mSimulations
+results <- lapply(c(1, 5, 10, 50), function(m) {
+  MCEM(data, theta.init, mSimulations = m, max.iter = max.iter, step_size = step_size)
+})
+
+# Extract log-likelihoods for plotting
+logLikelihoods <- sapply(results, function(res) res$logLikelihood)
+
+```
+
+
+
+```{r}
+# Plot log-likelihoods for different mSimulations
+plot(1:max.iter, logLikelihoods[, 1], type = "l", col = "red", ylim = range(logLikelihoods),
+     xlab = "Iteration", ylab = "Log-Likelihood", main = "MCEM Convergence for Varying mSimulations")
+lines(1:max.iter, logLikelihoods[, 2], col = "blue")
+lines(1:max.iter, logLikelihoods[, 3], col = "green")
+lines(1:max.iter, logLikelihoods[, 4], col = "violet")
+legend("bottomright", legend = c("m = 1", "m = 5", "m = 10", "m = 50"),
+       col = c("red", "blue", "green", "violet"), lty = 1)
+
+```
+
+```{r}
+ #Experiment with different step sizes
+stepSizes <- c(0.1, 0.5, 1)
+results_step <- lapply(stepSizes, function(step) {
+  MCEM(data, theta.init, mSimulations = 10, max.iter = max.iter, step_size = step)
+})
+
+# Extract log-likelihoods
+logLikelihoods_step <- sapply(results_step, function(res) res$logLikelihood)
+
+# Plot log-likelihoods for different step sizes
+plot(1:max.iter, logLikelihoods_step[, 1], type = "l", col = "red", ylim = range(logLikelihoods_step),
+     xlab = "Iteration", ylab = "Log-Likelihood", main = "Effect of Step Size on MCEM Convergence")
+lines(1:max.iter, logLikelihoods_step[, 2], col = "blue")
+lines(1:max.iter, logLikelihoods_step[, 3], col = "green")
+legend("bottomright", legend = c("Step Size = 0.1", "Step Size = 0.5", "Step Size = 1"),
+       col = c("red", "blue", "green"), lty = 1)
+```
+
+
+
+```{r}
+# Simulate data with varying fractions of missing information
+fractions_missing <- c(0, 0.2, 0.5, 0.8)
+data_missing <- lapply(fractions_missing, function(fraction) {
+  observed <- sample(c(TRUE, FALSE), size = length(data), prob = c(1 - fraction, fraction), replace = TRUE)
+  data[observed]
+})
+
+# Perform MCEM for each missing data scenario
+results_missing <- lapply(data_missing, function(partial_data) {
+  MCEM(partial_data, theta.init, mSimulations = 10, max.iter = max.iter, step_size = step_size)
+})
+
+# Extract log-likelihoods
+logLikelihoods_missing <- sapply(results_missing, function(res) res$logLikelihood)
+
+# Plot log-likelihoods for different missing fractions
+plot(1:max.iter, logLikelihoods_missing[, 1], type = "l", col = "red", ylim = range(logLikelihoods_missing),
+     xlab = "Iteration", ylab = "Log-Likelihood", main = "Effect of Missing Information on MCEM Convergence")
+lines(1:max.iter, logLikelihoods_missing[, 2], col = "blue")
+lines(1:max.iter, logLikelihoods_missing[, 3], col = "green")
+lines(1:max.iter, logLikelihoods_missing[, 4], col = "purple")
+legend("bottomright", legend = c("0%", "20%", "50%", "80% Missing"),
+       col = c("red", "blue", "green", "purple"), lty = 1)
+
+```
+
+
+
+
+
